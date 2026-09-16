@@ -7,7 +7,7 @@ with detection and clips appear as soon as each one is ready:
         │  time-ordered deliveries, split into K contiguous segments
         ▼
     verify workers (K threads, one segment each)
-        │  each event: pose check → keep / reject → hand kept events on
+        │  each event: one decode, swing check, ball check → keep / reject → hand kept events on
         ▼  (queue)
     cut workers (M threads, shared queue)
         │  ffmpeg cut → clip published to the job
@@ -43,11 +43,12 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from . import ffmpeg_io, pose_verifier
+from . import ffmpeg_io, pose_verifier, visual_check
 from .clipper import cut_clip
 from .detector import Event, scan_audio
 from .video_probe import probe
@@ -73,6 +74,10 @@ class PipelineParams:
     # Off by default: an unassessable clip is more often a throw-back than a
     # shot, and the user can opt back in from the Detect tab.
     include_unverified: bool = False
+    # also require a ball to be seen travelling to the batsman (optional and
+    # independent of the swing check: high precision but ~65% recall on the
+    # labelled sample - see ball_verifier). Needs the pose for the player box.
+    check_ball: bool = False
 
 
 class JobState:
@@ -90,6 +95,7 @@ class JobState:
         self.verified_done = 0
         self.rejected_visual = 0
         self.rejected_unverified = 0   # dropped: could not be visually checked
+        self.rejected_ball = 0         # dropped: no ball seen (only with check_ball)
         self.unverified = 0            # kept although it could not be checked
         self.cut_total = 0
         self.cut_done = 0
@@ -97,10 +103,25 @@ class JobState:
         self.video_duration = 0.0
         self.session = ""
         self.events: list[dict] = []
+        # wall-clock seconds; a stage's value is live while it runs
+        self.started_at = 0.0
+        self.scan_seconds = 0.0
+        self.verify_seconds = 0.0
+        self.cut_seconds = 0.0
+        self.total_seconds = 0.0
 
     def snapshot(self) -> dict:
         with self.lock:
+            now = time.monotonic()
+            running = self.state == "running" and self.started_at > 0
+            total = (now - self.started_at) if running else self.total_seconds
             return {
+                "timing": {
+                    "scan": round(self.scan_seconds, 1),
+                    "verify": round(self.verify_seconds, 1),
+                    "cut": round(self.cut_seconds, 1),
+                    "total": round(total, 1),
+                },
                 "video": self.video,
                 "state": self.state,
                 "stage": self.stage,
@@ -111,6 +132,7 @@ class JobState:
                 "verified_done": self.verified_done,
                 "rejected_visual": self.rejected_visual,
                 "rejected_unverified": self.rejected_unverified,
+                "rejected_ball": self.rejected_ball,
                 "unverified": self.unverified,
                 "cut_total": self.cut_total,
                 "cut_done": self.cut_done,
@@ -136,6 +158,9 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
                  prefix: str = "") -> None:
     """prefix: prepended to clip filenames so several videos can share one
     session directory (batch runs)."""
+    t_start = time.monotonic()
+    with job.lock:
+        job.started_at = t_start
     try:
         meta = probe(video)
         job.video_duration = meta["duration"]
@@ -144,6 +169,7 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
         scan = scan_audio(video, params.sensitivity, params.min_gap, params.strictness)
         events: list[Event] = scan.events
         with job.lock:
+            job.scan_seconds = time.monotonic() - t_start
             job.candidates = scan.candidates
             job.rejected_audio = scan.rejected_audio
             job.events_total = len(events)
@@ -151,10 +177,13 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
         if not events:
             with job.lock:
                 job.state = "done"
+                job.total_seconds = time.monotonic() - t_start
             return
 
         speed_floor = scan.speed_floor
-        visual = params.use_visual
+        # either visual check needs the pose: the ball check takes the
+        # player's position from it
+        visual = params.use_visual or params.check_ball
         if visual and not pose_verifier.pose_available():
             raise RuntimeError(
                 "The swing check needs the mediapipe package (0.10.x). "
@@ -185,6 +214,8 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
                         "audio_snr": round(ev.audio_snr, 1),
                         "hand_speed": round(ev.hand_speed, 2),
                         "verified": ev.visually_verified,
+                        "ball": ev.ball_seen,            # True / False / None (not assessable)
+                        "ball_track": ev.ball_track,
                         "start": round(start, 2),
                         "end": round(end, 2),
                         "url": f"/media/full/{out_dir.name}/{filename}",
@@ -214,26 +245,44 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
             for idx, ev in segment:
                 try:
                     keep = True
+                    reason = ""
                     if visual:
-                        res = pose_verifier.measure_swing(video, ev.time)
+                        # one decode serves both visual checks (see visual_check)
+                        win = visual_check.decode_window(video, ev.time)
+                        res = visual_check.check_swing(win)
                         ev.hand_speed = res.hand_speed
                         ev.visually_verified = res.verified
                         ev.detail = res.detail
-                        if res.verified and res.hand_speed < speed_floor:
-                            keep = False
-                            ev.rejected = f"no swing ({res.hand_speed:.1f} < {speed_floor:.1f})"
-                        elif not res.verified and not params.include_unverified:
-                            keep = False
-                            ev.rejected = f"not visually checked ({res.detail})"
+                        if params.use_visual:
+                            if res.verified and res.hand_speed < speed_floor:
+                                keep, reason = False, "swing"
+                                ev.rejected = f"no swing ({res.hand_speed:.1f} < {speed_floor:.1f})"
+                            elif not res.verified and not params.include_unverified:
+                                keep, reason = False, "unverified"
+                                ev.rejected = f"not visually checked ({res.detail})"
+                        if keep and params.check_ball:
+                            # only on survivors: rejected events never pay for it
+                            ball = visual_check.check_ball(win, res)
+                            ev.ball_seen, ev.ball_track = ball.seen, ball.track_len
+                            if ball.seen is False:
+                                keep, reason = False, "ball"
+                                ev.rejected = f"no ball seen ({ball.detail})"
+                            elif ball.seen is None and not params.include_unverified:
+                                keep, reason = False, "unverified"
+                                ev.rejected = f"ball not assessable ({ball.detail})"
+                        del win
                     with job.lock:
                         job.verified_done += 1
                         if not keep:
-                            if ev.visually_verified or not visual:
-                                job.rejected_visual += 1
-                            else:
+                            if reason == "unverified":
                                 job.rejected_unverified += 1
+                            elif reason == "ball":
+                                job.rejected_ball += 1
+                            else:
+                                job.rejected_visual += 1
                         else:
-                            if visual and not ev.visually_verified:
+                            if ((params.use_visual and not ev.visually_verified)
+                                    or (params.check_ball and ev.ball_seen is None)):
                                 job.unverified += 1
                             job.cut_total += 1
                             job.events.append({
@@ -241,6 +290,7 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
                                 "audio_snr": round(ev.audio_snr, 1),
                                 "hand_speed": round(ev.hand_speed, 2),
                                 "verified": ev.visually_verified,
+                                "ball": ev.ball_seen,
                             })
                     if keep:
                         cut_q.put((idx, ev))          # blocks if cutters are behind
@@ -251,12 +301,14 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
 
         verifiers = [threading.Thread(target=verify_worker, args=(seg,), daemon=True,
                                       name=f"verify-{i}") for i, seg in enumerate(segments)]
+        t_verify = time.monotonic()
         for t in verifiers:
             t.start()
         for t in verifiers:
             t.join()
 
         with job.lock:
+            job.verify_seconds = time.monotonic() - t_verify
             job.stage = "cutting"
         for _ in cutters:
             cut_q.put(_SENTINEL)
@@ -264,6 +316,9 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
             t.join()
 
         with job.lock:
+            # cutting overlaps verification; report it from the first event on
+            job.cut_seconds = time.monotonic() - t_verify
+            job.total_seconds = time.monotonic() - t_start
             job.events.sort(key=lambda e: e["time"])
             job.stage = "done"
             job.state = "done"
@@ -273,6 +328,7 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
         with job.lock:
             job.state = "error"
             job.error = str(exc)
+            job.total_seconds = time.monotonic() - t_start
 
 
 class BatchJob:
@@ -290,14 +346,20 @@ class BatchJob:
         self.state = "running"
         self.error: Optional[str] = None
         self.current = 0
+        self.started_at = time.monotonic()
+        self.total_seconds = 0.0
 
     def snapshot(self) -> dict:
         parts = [j.snapshot() for j in self.jobs]
+        timing = {k: round(sum(pj["timing"][k] for pj in parts), 1) for k in ("scan", "verify", "cut")}
+        timing["total"] = round((time.monotonic() - self.started_at) if self.state == "running"
+                                else self.total_seconds, 1)
         clips = [c for pj in parts for c in pj["clips"]]
         clips.sort(key=lambda c: (c["video"], c["event_time"]))
         agg = {k: sum(pj[k] for pj in parts) for k in
                ("candidates", "rejected_audio", "events_total", "verified_done",
-                "rejected_visual", "rejected_unverified", "unverified", "cut_total", "cut_done")}
+                "rejected_visual", "rejected_unverified", "rejected_ball", "unverified",
+                "cut_total", "cut_done")}
         running = next((pj for pj in parts if pj["state"] == "running"), None)
         stage = running["stage"] if running else ("done" if self.state != "running" else "scanning")
         errors = [f'{pj["video"]}: {pj["error"]}' for pj in parts if pj["error"]]
@@ -309,8 +371,9 @@ class BatchJob:
             "error": "; ".join(errors) if errors else None,
             "session": self.session,
             "current": self.current,
+            "timing": timing,
             "videos": [{"video": pj["video"], "state": pj["state"], "stage": pj["stage"],
-                        "error": pj["error"],
+                        "error": pj["error"], "timing": pj["timing"],
                         "events_total": pj["events_total"], "verified_done": pj["verified_done"],
                         "cut_done": pj["cut_done"], "cut_total": pj["cut_total"],
                         "video_duration": pj["video_duration"], "events": pj["events"]}
@@ -327,7 +390,9 @@ def run_batch(batch: BatchJob, videos: list[Path], params: PipelineParams, out_d
             batch.current = i
             stub = re.sub(r"[^A-Za-z0-9_-]+", "_", video.stem)
             run_pipeline(job, video, params, out_dir, prefix=f"{stub}__")
+        batch.total_seconds = time.monotonic() - batch.started_at
         batch.state = "done"
     except Exception as exc:
+        batch.total_seconds = time.monotonic() - batch.started_at
         batch.state = "error"
         batch.error = str(exc)

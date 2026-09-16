@@ -20,18 +20,17 @@ const els = {
   postRoll: $("postRoll"), postRollVal: $("postRollVal"),
   sensitivity: $("sensitivity"), sensitivityVal: $("sensitivityVal"),
   strictness: $("strictness"), strictnessVal: $("strictnessVal"),
-  useVisual: $("useVisual"),
   minGap: $("minGap"), minGapVal: $("minGapVal"),
   resolution: $("resolution"),
   toDetectBtn: $("toDetectBtn"),
 
+  useVisual: $("useVisual"), checkBall: $("checkBall"),
   includeUnverified: $("includeUnverified"), includeUnverifiedRow: $("includeUnverifiedRow"),
   runBtn: $("runBtn"), runStatus: $("runStatus"), toReviewBtn: $("toReviewBtn"),
-  detectStatus: $("detectStatus"), videoProgress: $("videoProgress"),
   stageBoard: $("stageBoard"),
-  stScan: $("stScan"), stScanVal: $("stScanVal"),
-  stVerify: $("stVerify"), stVerifyVal: $("stVerifyVal"),
-  stCut: $("stCut"), stCutVal: $("stCutVal"),
+  stScan: $("stScan"), stScanVal: $("stScanVal"), stScanTime: $("stScanTime"),
+  stVerify: $("stVerify"), stVerifyVal: $("stVerifyVal"), stVerifyTime: $("stVerifyTime"),
+  stCut: $("stCut"), stCutVal: $("stCutVal"), stCutTime: $("stCutTime"),
   detectProgressWrap: $("detectProgressWrap"), detectProgressBar: $("detectProgressBar"),
   detectProgressText: $("detectProgressText"),
   detectBreakdown: $("detectBreakdown"), timeline: $("timeline"),
@@ -51,8 +50,9 @@ const state = {
   running: false,
   done: false,
   session: null,
+  runParams: null,    // what the current run was started with
   clips: null,        // [{...clip, selected, card}]
-  timelineKey: "",    // last rendered timeline, to skip redraws that change nothing
+  timelineRows: new Map(),   // video name -> { row, strip, ticks } (ticks redrawn only when the count changes)
 };
 
 let activeTab = "params";
@@ -69,6 +69,12 @@ function plural(n, word, words = word + "s") {
   return `${n} ${n === 1 ? word : words}`;
 }
 
+/** Seconds -> "12s" / "1:05" for run timings. */
+function fmtElapsed(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  return sec < 60 ? `${sec}s` : fmtDuration(sec);
+}
+
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -79,12 +85,24 @@ function currentParams() {
     sensitivity: parseFloat(els.sensitivity.value),
     strictness: parseFloat(els.strictness.value),
     use_visual: els.useVisual.checked,
-    include_unverified: els.useVisual.checked && els.includeUnverified.checked,
+    check_ball: els.checkBall.checked,
+    include_unverified: anyVisualCheck() && els.includeUnverified.checked,
     min_gap: parseFloat(els.minGap.value),
     pre_roll: parseFloat(els.preRoll.value),
     post_roll: parseFloat(els.postRoll.value),
     resolution: els.resolution.value,
   };
+}
+
+function anyVisualCheck() {
+  return els.useVisual.checked || els.checkBall.checked;
+}
+
+function visualStageName() {
+  if (els.useVisual.checked && els.checkBall.checked) return "Swing + ball";
+  if (els.checkBall.checked) return "Check ball";
+  if (els.useVisual.checked) return "Check swing";
+  return "Check video";
 }
 
 // ---------------------------------------------------------------- tabs
@@ -109,8 +127,10 @@ function refreshTabState() {
   els.toReviewBtn.disabled = !state.done || !state.clips || state.clips.length === 0;
   els.runBtn.disabled = state.running || state.videos.length === 0;
   els.uploadBtn.disabled = state.running;
-  els.includeUnverified.disabled = state.running || !els.useVisual.checked;
-  els.includeUnverifiedRow.classList.toggle("muted", !els.useVisual.checked);
+  els.useVisual.disabled = els.checkBall.disabled = state.running;
+  els.includeUnverified.disabled = state.running || !anyVisualCheck();
+  els.includeUnverifiedRow.classList.toggle("muted", !anyVisualCheck());
+  els.stVerify.querySelector(".stage-name").textContent = visualStageName();
   for (const v of state.videos) v.item.querySelector(".source-remove").disabled = state.running;
   if (tabDisabled(activeTab)) setTab("params");
 }
@@ -128,14 +148,13 @@ els.toReviewBtn.addEventListener("click", () => setTab("review"));
 function clearRun() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   state.job = null; state.running = false; state.done = false;
-  state.session = null; state.clips = null; state.timelineKey = "";
+  state.session = null; state.clips = null; state.runParams = null; state.timelineRows = new Map();
 
-  els.detectStatus.textContent = "";
   els.runStatus.textContent = "";
-  els.videoProgress.innerHTML = "";
   els.stageBoard.classList.add("hidden");
   for (const s of [els.stScan, els.stVerify, els.stCut]) s.classList.remove("active", "done");
   els.stScanVal.textContent = els.stVerifyVal.textContent = els.stCutVal.textContent = "–";
+  els.stScanTime.textContent = els.stVerifyTime.textContent = els.stCutTime.textContent = "";
   els.detectProgressWrap.classList.add("hidden");
   els.detectProgressBar.style.width = "0%";
   els.detectBreakdown.classList.add("hidden");
@@ -351,6 +370,7 @@ bindSlider(els.strictness, els.strictnessVal, 0);
 bindSlider(els.minGap, els.minGapVal);
 els.resolution.addEventListener("change", clearRun);
 els.useVisual.addEventListener("change", clearRun);
+els.checkBall.addEventListener("change", clearRun);
 els.includeUnverified.addEventListener("change", clearRun);
 
 // ---------------------------------------------------------------- run
@@ -364,9 +384,10 @@ els.runBtn.addEventListener("click", async () => {
   els.stageBoard.classList.remove("hidden");
   els.stScan.classList.add("active");
   try {
+    state.runParams = currentParams();
     const res = await fetch(api("/api/process"), {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(currentParams()),
+      body: JSON.stringify(state.runParams),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Could not start");
@@ -379,11 +400,13 @@ els.runBtn.addEventListener("click", async () => {
   }
 });
 
+/** [row class, status text] for one video of the batch. */
 function videoLine(v, i, j) {
   if (v.state === "error") return ["error", "failed — " + (v.error || "unknown error")];
-  if (v.state === "done") return ["done", plural(v.cut_done, "clip") + (v.events_total === 0 ? " (no deliveries heard)" : "")];
+  const took = v.timing?.total ? ` · ${fmtElapsed(v.timing.total)}` : "";
+  if (v.state === "done") return ["done", plural(v.cut_done, "clip") + (v.events_total === 0 ? " (no deliveries heard)" : "") + took];
   const started = i < j.current || (i === j.current && v.stage !== "scanning");
-  if (started) return ["running", `${v.verified_done}/${v.events_total} checked · ${v.cut_done}/${v.cut_total} cut`];
+  if (started) return ["running", `${v.verified_done}/${v.events_total} checked · ${v.cut_done}/${v.cut_total} cut${took}`];
   return [i === j.current && j.state === "running" ? "running" : "", i === j.current ? "listening…" : "waiting"];
 }
 
@@ -394,10 +417,7 @@ async function pollJob() {
   if (!state.job) return;                 // cleared while the request was in flight
 
   const videos = j.videos || [];
-  els.videoProgress.innerHTML = videos.map((v, i) => {
-    const [cls, txt] = videoLine(v, i, j);
-    return `<div class="vp ${cls}"><b title="${escapeHtml(v.video)}">${escapeHtml(v.video)}</b><span>${escapeHtml(txt)}</span></div>`;
-  }).join("");
+  const t = j.timing || {};
 
   // stage board (aggregate over the batch)
   const nVid = videos.length || 1;
@@ -406,11 +426,14 @@ async function pollJob() {
   els.stScanVal.textContent = scanned ? plural(j.events_total, "delivery", "deliveries") : "listening…";
   els.stVerify.classList.toggle("active", j.stage === "verifying");
   els.stVerify.classList.toggle("done", j.state !== "running" && j.events_total > 0);
-  const dropped = (j.rejected_visual || 0) + (j.rejected_unverified || 0);
+  const dropped = (j.rejected_visual || 0) + (j.rejected_ball || 0) + (j.rejected_unverified || 0);
   els.stVerifyVal.textContent = scanned ? `${j.verified_done} / ${j.events_total}` + (dropped ? ` · ${dropped} dropped` : "") : "–";
   els.stCut.classList.toggle("active", j.stage === "verifying" || j.stage === "cutting");
   els.stCut.classList.toggle("done", j.state === "done");
   els.stCutVal.textContent = scanned ? `${j.cut_done} / ${j.cut_total}` : "–";
+  els.stScanTime.textContent = t.scan ? fmtElapsed(t.scan) : "";
+  els.stVerifyTime.textContent = t.verify ? fmtElapsed(t.verify) : "";
+  els.stCutTime.textContent = t.cut ? fmtElapsed(t.cut) : "";
 
   const total = 2 * Math.max(j.events_total, 1);
   els.detectProgressWrap.classList.remove("hidden");
@@ -420,7 +443,7 @@ async function pollJob() {
     (j.stage === "scanning" ? "listening…" : `checked ${j.verified_done}/${j.events_total} · cut ${j.cut_done}/${j.cut_total}`);
 
   mergeClips(j.clips || []);
-  renderTimeline(videos);
+  renderTimeline(videos, j);
 
   if (j.state === "done" || j.state === "error") {
     clearInterval(pollTimer); pollTimer = null;
@@ -431,12 +454,14 @@ async function pollJob() {
     if (j.state === "error" && (!j.clips || !j.clips.length)) {
       els.runStatus.textContent = "Error: " + j.error;
     } else {
-      els.runStatus.textContent = `Done — ${plural(j.cut_done, "clip")} ready` + (nVid > 1 ? ` from ${nVid} videos` : "");
+      els.runStatus.textContent = `Done — ${plural(j.cut_done, "clip")} ready` + (nVid > 1 ? ` from ${nVid} videos` : "")
+        + (t.total ? ` in ${fmtElapsed(t.total)}` : "");
       renderBreakdown(j);
     }
     refreshTabState();
   } else {
-    els.runStatus.textContent = j.stage === "scanning" ? "Listening…" : "Checking and cutting…";
+    els.runStatus.textContent = (j.stage === "scanning" ? "Listening…" : "Checking and cutting…")
+      + (t.total ? ` ${fmtElapsed(t.total)}` : "");
   }
 }
 
@@ -447,7 +472,9 @@ function renderBreakdown(j) {
     `<b>${j.rejected_audio}</b> too quiet / not sharp enough`,
     `<b>${merged}</b> within the minimum gap of a louder one`,
   ];
-  if (els.useVisual.checked) parts.push(`<b>${j.rejected_visual}</b> rejected — nobody swung`);
+  const p = state.runParams || currentParams();
+  if (p.use_visual) parts.push(`<b>${j.rejected_visual}</b> rejected — nobody swung`);
+  if (p.check_ball) parts.push(`<b>${j.rejected_ball || 0}</b> rejected — no ball seen`);
   parts.push(`<b>${j.cut_done}</b> clips cut`);
   let html = parts.join(" &nbsp;·&nbsp; ");
   if (j.rejected_unverified) {
@@ -459,26 +486,45 @@ function renderBreakdown(j) {
   els.detectBreakdown.classList.remove("hidden");
 }
 
-/** One timeline strip per video, deliveries as ticks. Redrawn only when
- * the set of events actually changed - this runs on every poll. */
-function renderTimeline(videos) {
-  const withEvents = videos.filter((v) => v.events && v.events.length && v.video_duration);
-  if (!withEvents.length) return;
-  const key = withEvents.map((v) => `${v.video}:${v.events.length}`).join("|");
-  if (key === state.timelineKey) return;
-  state.timelineKey = key;
+/** One row per video: name, clip count / status, and a strip with a tick
+ * per delivery between 0:00 and the video's end. Runs on every poll, so
+ * only the status text is touched unless the tick count changed. */
+function renderTimeline(videos, j) {
+  if (!videos.length) return;
   els.timeline.classList.remove("hidden");
-  els.timeline.innerHTML = "";
-  els.timeline.style.height = `${withEvents.length * 34}px`;
-  withEvents.forEach((v, row) => {
-    for (const ev of v.events) {
-      const tick = document.createElement("div");
-      tick.className = "tick";
-      tick.style.left = `${(ev.time / v.video_duration) * 100}%`;
-      tick.style.top = `${row * 34 + 4}px`;
-      tick.title = `${v.video} · ${ev.time.toFixed(2)}s`;
-      els.timeline.appendChild(tick);
+  videos.forEach((v, i) => {
+    let r = state.timelineRows.get(v.video);
+    if (!r) {
+      const row = document.createElement("div");
+      row.className = "tl-row";
+      row.innerHTML = `
+        <div class="tl-head"><b></b><span class="tl-status"></span></div>
+        <div class="tl-strip"><span class="tl-empty"></span></div>
+        <div class="tl-times"><span>0:00</span><span class="tl-end"></span></div>`;
+      const name = row.querySelector("b");
+      name.textContent = v.video; name.title = v.video;
+      r = { row, strip: row.querySelector(".tl-strip"), ticks: -1 };
+      state.timelineRows.set(v.video, r);
+      els.timeline.appendChild(row);
     }
+    const [cls, txt] = videoLine(v, i, j);
+    r.row.className = "tl-row " + cls;
+    r.row.querySelector(".tl-status").textContent = txt;
+    r.row.querySelector(".tl-end").textContent = v.video_duration ? fmtDuration(v.video_duration) : "";
+    const events = v.events || [];
+    if (events.length !== r.ticks && v.video_duration) {
+      r.ticks = events.length;
+      r.strip.innerHTML = "";
+      for (const ev of events) {
+        const tick = document.createElement("div");
+        tick.className = "tick";
+        tick.style.left = `${(ev.time / v.video_duration) * 100}%`;
+        tick.title = `${fmtDuration(ev.time)} (${ev.time.toFixed(2)}s)`;
+        r.strip.appendChild(tick);
+      }
+    }
+    const empty = r.strip.querySelector(".tl-empty") || r.strip.appendChild(Object.assign(document.createElement("span"), { className: "tl-empty" }));
+    empty.textContent = events.length ? "" : (v.state === "done" ? "no deliveries" : (cls === "running" ? "listening…" : ""));
   });
 }
 
@@ -521,6 +567,11 @@ function buildClipCard(clip) {
   if (clip.audio_snr != null) scores.push(`<span title="how far the sound stands above this video's noise floor">sound ${clip.audio_snr}</span>`);
   if (clip.hand_speed != null && clip.hand_speed > 0) scores.push(`<span title="peak hand speed, torso-lengths per second">hands ${clip.hand_speed.toFixed(1)}</span>`);
   if (clip.verified === false) scores.push(`<span class="unverified">not visually checked</span>`);
+  if (state.runParams?.check_ball) {
+    if (clip.ball === true) scores.push(`<span class="ball-yes" title="frames the ball was tracked for on its way to the batsman">ball ✓ ${clip.ball_track}</span>`);
+    else if (clip.ball === false) scores.push(`<span class="unverified">ball ✗</span>`);
+    else scores.push(`<span class="unverified">ball ?</span>`);
+  }
   const multi = state.videos.length > 1;
   card.innerHTML = `
     <video controls preload="metadata"></video>

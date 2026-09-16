@@ -8,7 +8,7 @@ import cv2
 def probe(video_path: Path) -> dict:
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        raise ValueError(f"Could not open video: {video_path}")
+        raise ValueError(f"Could not open video: {video_path.name}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
     frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)

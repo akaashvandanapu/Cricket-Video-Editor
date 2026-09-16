@@ -30,9 +30,9 @@ footage it was built against):
  - real frame rate is used, so 24/30/60 fps footage behaves the same
  - the player is located from motion with a noise-adaptive threshold, so
    brightness / exposure / codec noise do not matter
- - it FAILS OPEN: if pose can't be found (player too small, occluded,
-   mediapipe not installed) the candidate is kept and flagged unverified,
-   never silently dropped
+ - if pose can't be found (player too small, occluded) the result is
+   "unverified", never a guess; the pipeline leaves those out by default
+   and keeps them flagged when the user asks for it
 
 Limitation worth knowing: slow-motion footage (recorded at 120/240fps and
 played back slowed) lowers apparent hand speed, so the visual stage will
@@ -41,13 +41,10 @@ be conservative there.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
-
-from . import ffmpeg_io
 
 ANALYSIS_WIDTH = 640
 HALF_WINDOW = 0.30          # seconds of video examined either side of the sound
@@ -83,6 +80,10 @@ class SwingResult:
     hand_speed: float       # peak hand speed, torso-lengths per second
     verified: bool          # False = could not measure (fails open)
     detail: str
+    # where the player is, as fractions of the frame (y0, y1, x0, x1), from
+    # the pose landmarks, per frame of the window - lets a later check (the
+    # ball) reuse it at any resolution without searching for the player again
+    player_extents: list[tuple[int, tuple[float, float, float, float]]] = field(default_factory=list)
 
 
 def _player_box(gray: np.ndarray) -> Optional[tuple[int, int, int, int]]:
@@ -104,24 +105,23 @@ def _player_box(gray: np.ndarray) -> Optional[tuple[int, int, int, int]]:
     return int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max())
 
 
-def measure_swing(video: Path, event_time: float) -> SwingResult:
-    """Peak hand speed around `event_time`, in torso-lengths per second."""
+def measure_swing_frames(frames: np.ndarray, fps: float) -> SwingResult:
+    """Peak hand speed over `frames` ((n, h, w, 3) bgr24, any width, covering
+    +-HALF_WINDOW around the sound), in torso-lengths per second. The
+    pipeline decodes one window per delivery (visual_check) and shares it
+    between this and the ball check."""
     mp_pose = _load_pose()
     if mp_pose is None:
         return SwingResult(0.0, False, "pose library unavailable")
-
-    try:
-        import cv2
-        h, w = ffmpeg_io.probe_frame_size(video, ANALYSIS_WIDTH, "bgr24")
-        frames = ffmpeg_io.decode_window(video, event_time - HALF_WINDOW,
-                                         2 * HALF_WINDOW, ANALYSIS_WIDTH, h, "bgr24")
-    except Exception as exc:
-        return SwingResult(0.0, False, f"decode failed: {exc}")
+    import cv2
 
     n = len(frames)
     if n < 6:
         return SwingResult(0.0, False, "too few frames")
-    fps = n / (2 * HALF_WINDOW)
+    h, w = frames.shape[1], frames.shape[2]
+    if w != ANALYSIS_WIDTH:
+        frames = np.stack([cv2.resize(f, (ANALYSIS_WIDTH, int(h * ANALYSIS_WIDTH / w))) for f in frames])
+        h = frames.shape[1]
 
     gray = frames[..., 1]  # green channel as a cheap luma proxy
     box = _player_box(gray)
@@ -139,6 +139,7 @@ def measure_swing(video: Path, event_time: float) -> SwingResult:
     wrists: list[Optional[np.ndarray]] = []
     hips: list[Optional[np.ndarray]] = []
     torsos: list[float] = []
+    extents: list[tuple[int, tuple[float, float, float, float]]] = []   # (frame, landmark bbox as frame fractions)
     found = 0
 
     with mp_pose.Pose(model_complexity=1, min_detection_confidence=0.3,
@@ -155,6 +156,11 @@ def measure_swing(video: Path, event_time: float) -> SwingResult:
             def pt(idx: int) -> np.ndarray:
                 return np.array([L[idx].x * ww, L[idx].y * hh])
 
+            vis = [(l.x, l.y) for l in L if l.visibility > 0.5]
+            if len(vis) >= 8:
+                xs, ys = zip(*vis)
+                extents.append((k, ((cy0 + min(ys) * hh) / h, (cy0 + max(ys) * hh) / h,
+                                    (cx0 + min(xs) * ww) / ANALYSIS_WIDTH, (cx0 + max(xs) * ww) / ANALYSIS_WIDTH)))
             shoulder = (pt(LM.LEFT_SHOULDER.value) + pt(LM.RIGHT_SHOULDER.value)) / 2
             hip = (pt(LM.LEFT_HIP.value) + pt(LM.RIGHT_HIP.value)) / 2
             wrists.append((pt(LM.LEFT_WRIST.value) + pt(LM.RIGHT_WRIST.value)) / 2)
@@ -167,7 +173,7 @@ def measure_swing(video: Path, event_time: float) -> SwingResult:
 
     torso = float(np.median([t for t in torsos if t > 0]))
     if torso < 4:
-        return SwingResult(0.0, False, "player too small to measure")
+        return SwingResult(0.0, False, "player too small to measure", extents)
 
     speeds = []
     for k in range(n - 1):
@@ -179,5 +185,5 @@ def measure_swing(video: Path, event_time: float) -> SwingResult:
         speeds.append(float(np.linalg.norm(r1 - r0) / torso * fps))
 
     if not speeds:
-        return SwingResult(0.0, False, "no usable landmark pairs")
-    return SwingResult(float(max(speeds)), True, f"pose on {found}/{n} frames")
+        return SwingResult(0.0, False, "no usable landmark pairs", extents)
+    return SwingResult(float(max(speeds)), True, f"pose on {found}/{n} frames", extents)

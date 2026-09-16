@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Cricket Highlight Cutter</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2714%27 fill=%27%235fd068%27/%3E%3Cpath d=%27M9 23 L23 9%27 stroke=%27%230f1613%27 stroke-width=%274%27 stroke-linecap=%27round%27/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="style.css?v=7" />
+<link rel="stylesheet" href="style.css?v=9" />
 </head>
 <body>
   <header class="topbar">
@@ -64,13 +64,6 @@
             <p class="hint">Raise this if you still get bat taps or ball throw-backs; lower it if soft or defensive shots are being missed. 0 keeps everything the sound stage found.</p>
           </div>
           <div class="param">
-            <label class="check-row">
-              <input type="checkbox" id="useVisual" checked autocomplete="off" />
-              Check the video too — only keep it if the batsman actually swung
-            </label>
-            <p class="hint">Measures hand speed from the player's body pose around each sound. Removes loud moments where nobody played a shot.</p>
-          </div>
-          <div class="param">
             <label for="minGap">Minimum gap between two deliveries: <span id="minGapVal">3.5</span>s</label>
             <input type="range" id="minGap" min="1.5" max="8" step="0.5" value="3.5" autocomplete="off" />
             <p class="hint">Also removes bat taps and throw-backs landing within this many seconds of a real hit. Lower it only if genuinely quick deliveries are being merged.</p>
@@ -87,27 +80,42 @@
 
         <!-- ---------------- Detect + cut ---------------- -->
         <div class="tab-panel" data-panel="detect">
-          <p class="hint" id="detectIntro">One pass over every video on the left: listens for each bat-on-ball sound, checks the batsman swung, and cuts each delivery to a clip — all running in parallel. Clips appear in the next tab as they finish.</p>
-          <div class="param" id="includeUnverifiedRow">
-            <label class="check-row">
-              <input type="checkbox" id="includeUnverified" autocomplete="off" />
-              Include deliveries that could not be visually checked
-            </label>
-            <p class="hint">When the player can't be found around a sound (too small, off-frame, occluded) the swing check has no verdict. By default those moments are left out; tick this to keep them, flagged, so you can judge them yourself.</p>
+          <p class="hint" id="detectIntro">One pass over every video on the left: listens for each bat-on-ball sound, checks the video around it, and cuts each delivery to a clip — all running in parallel. Clips appear in the next tab as they finish.</p>
+          <div class="check-group" id="visualChecks">
+            <div class="check-group-title">Visual checks</div>
+            <div class="param">
+              <label class="check-row">
+                <input type="checkbox" id="useVisual" checked autocomplete="off" />
+                Check the batsman swung
+              </label>
+              <p class="hint">Measures hand speed from the player's body pose around each sound. Removes loud moments where nobody played a shot — bat taps, throw-backs, the door.</p>
+            </div>
+            <div class="param">
+              <label class="check-row">
+                <input type="checkbox" id="checkBall" autocomplete="off" />
+                Check a ball was bowled to the batsman <span class="tag">experimental</span>
+              </label>
+              <p class="hint">Tracks a small object travelling to the batsman just before the sound, any colour. Very few false alarms, but on busy footage (a feeder close to the camera, netting thrashing) it sees the ball only about two times in three — so it can drop real deliveries. Adds roughly 3 seconds per delivery.</p>
+            </div>
+            <div class="param" id="includeUnverifiedRow">
+              <label class="check-row">
+                <input type="checkbox" id="includeUnverified" autocomplete="off" />
+                Include deliveries that could not be visually checked
+              </label>
+              <p class="hint">When the player can't be found around a sound (too small, off-frame, occluded) the checks above have no verdict. By default those moments are left out; tick this to keep them, flagged, so you can judge them yourself.</p>
+            </div>
           </div>
-          <div id="videoProgress" class="video-progress"></div>
-          <div id="detectStatus" class="result-text"></div>
           <div id="stageBoard" class="stage-board hidden">
-            <div class="stage" id="stScan"><span class="stage-name">Listen</span><span class="stage-val" id="stScanVal">–</span></div>
-            <div class="stage" id="stVerify"><span class="stage-name">Check swing</span><span class="stage-val" id="stVerifyVal">–</span></div>
-            <div class="stage" id="stCut"><span class="stage-name">Cut clips</span><span class="stage-val" id="stCutVal">–</span></div>
+            <div class="stage" id="stScan"><span class="stage-name">Listen</span><span class="stage-val" id="stScanVal">–</span><span class="stage-time" id="stScanTime"></span></div>
+            <div class="stage" id="stVerify"><span class="stage-name">Check swing</span><span class="stage-val" id="stVerifyVal">–</span><span class="stage-time" id="stVerifyTime"></span></div>
+            <div class="stage" id="stCut"><span class="stage-name">Cut clips</span><span class="stage-val" id="stCutVal">–</span><span class="stage-time" id="stCutTime"></span></div>
           </div>
           <div id="detectProgressWrap" class="progress-wrap hidden">
             <div id="detectProgressBar" class="progress-bar"></div>
             <span id="detectProgressText"></span>
           </div>
           <div id="detectBreakdown" class="breakdown hidden"></div>
-          <div id="timeline" class="timeline hidden"></div>
+          <div id="timeline" class="timelines hidden"></div>
         </div>
 
         <!-- ---------------- Review ---------------- -->
@@ -148,6 +156,6 @@
   </main>
 
   <div id="dropOverlay" class="drop-overlay hidden"><span>Drop the video to upload</span></div>
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

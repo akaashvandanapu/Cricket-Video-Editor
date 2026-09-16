@@ -210,6 +210,7 @@ class ProcessRequest(BaseModel):
     post_roll: float = Field(3.0, ge=0.2, le=15)
     resolution: str = Field("1080", pattern="^(original|1080|720)$")
     include_unverified: bool = False
+    check_ball: bool = False
 
 
 pipeline_jobs: dict[str, pipeline.BatchJob] = {}
@@ -221,7 +222,7 @@ def process(req: ProcessRequest):
     pipeline per video, run back to back into one session. Poll
     /api/jobs/{id}: clips appear in the result as each one finishes."""
     paths = [resolve_video(v) for v in dict.fromkeys(req.videos)]   # de-dupe, keep order
-    if req.use_visual and not pose_verifier.pose_available():
+    if (req.use_visual or req.check_ball) and not pose_verifier.pose_available():
         raise HTTPException(
             500,
             "The swing check needs mediapipe 0.10.x in backend/.venv. Run: "
@@ -245,6 +246,7 @@ def process(req: ProcessRequest):
         sensitivity=req.sensitivity, min_gap=req.min_gap, strictness=req.strictness,
         use_visual=req.use_visual, pre_roll=req.pre_roll, post_roll=req.post_roll,
         resolution=req.resolution, include_unverified=req.include_unverified,
+        check_ball=req.check_ball,
     )
     threading.Thread(target=pipeline.run_batch, args=(batch, paths, params, out_dir),
                      daemon=True, name=f"pipeline-{job_id}").start()

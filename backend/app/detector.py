@@ -56,6 +56,8 @@ class Event:
     audio_snr: float
     hand_speed: float = 0.0
     visually_verified: bool = False
+    ball_seen: Optional[bool] = None     # True / False / None = not assessable
+    ball_track: int = 0                  # frames the ball was followed for
     detail: str = ""
     rejected: Optional[str] = None
 

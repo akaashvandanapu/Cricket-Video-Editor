@@ -203,13 +203,25 @@ button.secondary:hover:not(:disabled) { background: rgba(95, 208, 104, 0.08); bo
 .param input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .param input[type="range"]:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 4px; border-radius: 4px; }
 .param.muted { opacity: 0.5; }
+.check-group { margin: 14px 0 6px; padding: 12px 14px 2px; border: 1px solid var(--border); border-radius: 8px; background: #0c110d; max-width: 720px; }
+.check-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin-bottom: 10px; }
+.check-group .param { margin-bottom: 12px; }
+.tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--warn); border: 1px solid var(--warn); border-radius: 4px; padding: 1px 5px; margin-left: 4px; }
 
 .check-row { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; cursor: pointer; }
 .check-row input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
 .check-row input:disabled { cursor: not-allowed; }
 
-.timeline {
-  margin: 12px 0;
+/* one row per video: title line, then a strip with a tick per delivery */
+.timelines { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; max-width: 720px; }
+.tl-row { display: flex; flex-direction: column; gap: 5px; }
+.tl-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--muted); min-width: 0; }
+.tl-head b { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tl-head .tl-status { margin-left: auto; white-space: nowrap; }
+.tl-row.running .tl-head b { color: var(--accent); }
+.tl-row.done .tl-head .tl-status { color: var(--accent); }
+.tl-row.error .tl-head .tl-status { color: var(--warn); }
+.tl-strip {
   height: 34px;
   background: #0c110d;
   border: 1px solid var(--border);
@@ -217,7 +229,9 @@ button.secondary:hover:not(:disabled) { background: rgba(95, 208, 104, 0.08); bo
   position: relative;
   overflow: hidden;
 }
-.timeline .tick { position: absolute; top: 4px; bottom: 4px; width: 2px; background: var(--accent); border-radius: 1px; }
+.tl-strip .tick { position: absolute; top: 4px; bottom: 4px; width: 2px; background: var(--accent); border-radius: 1px; }
+.tl-strip .tl-empty { position: absolute; left: 10px; top: 8px; font-size: 12px; color: var(--muted); }
+.tl-times { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .hidden { display: none !important; }
 
 .breakdown {
@@ -266,6 +280,7 @@ button.secondary:hover:not(:disabled) { background: rgba(95, 208, 104, 0.08); bo
 .clip-card .clip-label { font-size: 12px; color: var(--text); margin-top: 6px; }
 .clip-card .clip-scores { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; }
 .clip-card .clip-scores .unverified { color: var(--warn); }
+.clip-card .clip-scores .ball-yes { color: var(--accent); }
 .clip-card label.clip-check { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px; cursor: pointer; }
 .clip-card label.clip-check input { accent-color: var(--accent); }
 .clip-card.excluded { opacity: 0.42; }
@@ -296,12 +311,6 @@ button.secondary:hover:not(:disabled) { background: rgba(95, 208, 104, 0.08); bo
 }
 .export-result a:hover { background: #76dd7e; }
 
-.video-progress { display: flex; flex-direction: column; gap: 4px; margin: 10px 0 4px; font-size: 13px; color: var(--muted); max-width: 720px; }
-.video-progress .vp { display: flex; gap: 10px; align-items: center; }
-.video-progress .vp b { color: var(--text); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.video-progress .vp.done { color: var(--accent); }
-.video-progress .vp.running b { color: var(--accent); }
-.video-progress .vp.error, .video-progress .vp.error b { color: var(--warn); }
 .clip-card .clip-video { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
 
 /* ---------------- pipeline stage board ---------------- */
@@ -320,6 +329,7 @@ button.secondary:hover:not(:disabled) { background: rgba(95, 208, 104, 0.08); bo
 }
 .stage-name { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
 .stage-val { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage-time { font-size: 11px; color: var(--muted); min-height: 14px; font-variant-numeric: tabular-nums; }
 .stage.active { border-color: var(--accent-dim); background: #0e1711; }
 .stage.active .stage-name { color: var(--accent); }
 .stage.done { border-color: var(--accent); }
