@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -272,14 +272,23 @@ def export(req: ExportRequest):
     if req.mode in ("separate", "both"):
         zip_path = out_dir / f"selected_{export_id}.zip"
         zip_clips(ordered_clips, zip_path)
-        result["zip_url"] = f"/media/full/{out_dir.name}/{zip_path.name}"
+        result["zip_url"] = f"/api/download/{out_dir.name}/{zip_path.name}"
 
     if req.mode in ("concat", "both"):
         concat_path = out_dir / f"combined_{export_id}.mp4"
         concat_clips(ordered_clips, concat_path)
-        result["concat_url"] = f"/media/full/{out_dir.name}/{concat_path.name}"
+        result["concat_url"] = f"/api/download/{out_dir.name}/{concat_path.name}"
 
     return result
+
+
+@app.get("/api/download/{session}/{filename}")
+def download(session: str, filename: str):
+    """Serve an export as a file download. The UI lives on a different
+    origin from the API, and browsers ignore <a download> across origins -
+    without Content-Disposition the browser just plays the video inline."""
+    path = _resolve_session_clip(session, filename)
+    return FileResponse(path, filename=path.name, media_type="application/octet-stream")
 
 
 app.mount("/media", StaticFiles(directory=str(OUTPUT_DIR)), name="media")

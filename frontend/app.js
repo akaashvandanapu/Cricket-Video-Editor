@@ -507,8 +507,10 @@ els.exportBtn.addEventListener("click", async () => {
     if (!res.ok) throw new Error(data.detail || "Export failed");
     els.exportStatus.textContent = `Done (${filenames.length} clips)`;
     let html = "";
-    if (data.zip_url) html += `<a href="${api(data.zip_url)}" download>Download clips (.zip)</a>`;
-    if (data.concat_url) html += `<a href="${api(data.concat_url)}" download>Download combined video</a>`;
+    // links go through /api/download, which sets Content-Disposition so the
+    // browser saves the file instead of opening it (the UI is on another origin)
+    if (data.zip_url) html += `<a href="${api(data.zip_url)}">Download clips (.zip)</a>`;
+    if (data.concat_url) html += `<a href="${api(data.concat_url)}">Download combined video</a>`;
     els.exportResult.innerHTML = html;
   } catch (err) {
     els.exportStatus.textContent = "Error: " + err.message;
