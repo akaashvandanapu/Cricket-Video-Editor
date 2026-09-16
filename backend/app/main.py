@@ -123,18 +123,37 @@ def library():
     return {"videos": items}
 
 
+def _unique_destination(name: str) -> Path:
+    """Never overwrite: a second upload of `clip.mov` becomes `clip_2.mov`.
+    Silently replacing a file would also invalidate its proxy and any
+    session cut from it while the UI still lists the old one."""
+    dest = VIDEOS_DIR / name
+    stem, suffix = dest.stem, dest.suffix
+    n = 2
+    while dest.exists():
+        dest = VIDEOS_DIR / f"{stem}_{n}{suffix}"
+        n += 1
+    return dest
+
+
 @app.post("/api/upload")
 async def upload(files: list[UploadFile] = File(...)):
     saved = []
     for file in files:
-        safe_name = Path(file.filename).name
-        if Path(safe_name).suffix.lower() not in SUPPORTED_EXTENSIONS:
-            raise HTTPException(400, f"Unsupported file type: {safe_name}")
-        dest = VIDEOS_DIR / safe_name
-        with dest.open("wb") as out:
-            while chunk := await file.read(4 * 1024 * 1024):
-                out.write(chunk)
-        saved.append(safe_name)
+        safe_name = Path(file.filename or "").name
+        if not safe_name or Path(safe_name).suffix.lower() not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(400, f"Unsupported file type: {safe_name or '(unnamed)'}")
+        dest = _unique_destination(safe_name)
+        tmp = dest.with_name(dest.name + ".uploading")
+        try:
+            with tmp.open("wb") as out:
+                while chunk := await file.read(4 * 1024 * 1024):
+                    out.write(chunk)
+            tmp.replace(dest)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+        saved.append(dest.name)
     return {"names": saved}
 
 
@@ -189,7 +208,8 @@ class ProcessRequest(BaseModel):
     use_visual: bool = True
     pre_roll: float = Field(3.0, ge=0.2, le=15)
     post_roll: float = Field(3.0, ge=0.2, le=15)
-    resolution: str = "1080"
+    resolution: str = Field("1080", pattern="^(original|1080|720)$")
+    include_unverified: bool = False
 
 
 pipeline_jobs: dict[str, pipeline.BatchJob] = {}
@@ -224,7 +244,7 @@ def process(req: ProcessRequest):
     params = pipeline.PipelineParams(
         sensitivity=req.sensitivity, min_gap=req.min_gap, strictness=req.strictness,
         use_visual=req.use_visual, pre_roll=req.pre_roll, post_roll=req.post_roll,
-        resolution=req.resolution,
+        resolution=req.resolution, include_unverified=req.include_unverified,
     )
     threading.Thread(target=pipeline.run_batch, args=(batch, paths, params, out_dir),
                      daemon=True, name=f"pipeline-{job_id}").start()
@@ -282,7 +302,7 @@ def export(req: ExportRequest):
     return result
 
 
-@app.get("/api/download/{session}/{filename}")
+@app.api_route("/api/download/{session}/{filename}", methods=["GET", "HEAD"])
 def download(session: str, filename: str):
     """Serve an export as a file download. The UI lives on a different
     origin from the API, and browsers ignore <a download> across origins -

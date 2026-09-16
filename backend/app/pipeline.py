@@ -69,6 +69,10 @@ class PipelineParams:
     pre_roll: float
     post_roll: float
     resolution: str
+    # keep deliveries the visual stage could not assess (player not found)?
+    # Off by default: an unassessable clip is more often a throw-back than a
+    # shot, and the user can opt back in from the Detect tab.
+    include_unverified: bool = False
 
 
 class JobState:
@@ -85,7 +89,8 @@ class JobState:
         self.events_total = 0
         self.verified_done = 0
         self.rejected_visual = 0
-        self.unverified = 0
+        self.rejected_unverified = 0   # dropped: could not be visually checked
+        self.unverified = 0            # kept although it could not be checked
         self.cut_total = 0
         self.cut_done = 0
         self.clips: list[dict] = []
@@ -105,6 +110,7 @@ class JobState:
                 "events_total": self.events_total,
                 "verified_done": self.verified_done,
                 "rejected_visual": self.rejected_visual,
+                "rejected_unverified": self.rejected_unverified,
                 "unverified": self.unverified,
                 "cut_total": self.cut_total,
                 "cut_done": self.cut_done,
@@ -216,10 +222,16 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
                         if res.verified and res.hand_speed < speed_floor:
                             keep = False
                             ev.rejected = f"no swing ({res.hand_speed:.1f} < {speed_floor:.1f})"
+                        elif not res.verified and not params.include_unverified:
+                            keep = False
+                            ev.rejected = f"not visually checked ({res.detail})"
                     with job.lock:
                         job.verified_done += 1
                         if not keep:
-                            job.rejected_visual += 1
+                            if ev.visually_verified or not visual:
+                                job.rejected_visual += 1
+                            else:
+                                job.rejected_unverified += 1
                         else:
                             if visual and not ev.visually_verified:
                                 job.unverified += 1
@@ -285,7 +297,7 @@ class BatchJob:
         clips.sort(key=lambda c: (c["video"], c["event_time"]))
         agg = {k: sum(pj[k] for pj in parts) for k in
                ("candidates", "rejected_audio", "events_total", "verified_done",
-                "rejected_visual", "unverified", "cut_total", "cut_done")}
+                "rejected_visual", "rejected_unverified", "unverified", "cut_total", "cut_done")}
         running = next((pj for pj in parts if pj["state"] == "running"), None)
         stage = running["stage"] if running else ("done" if self.state != "running" else "scanning")
         errors = [f'{pj["video"]}: {pj["error"]}' for pj in parts if pj["error"]]
@@ -298,6 +310,7 @@ class BatchJob:
             "session": self.session,
             "current": self.current,
             "videos": [{"video": pj["video"], "state": pj["state"], "stage": pj["stage"],
+                        "error": pj["error"],
                         "events_total": pj["events_total"], "verified_done": pj["verified_done"],
                         "cut_done": pj["cut_done"], "cut_total": pj["cut_total"],
                         "video_duration": pj["video_duration"], "events": pj["events"]}
