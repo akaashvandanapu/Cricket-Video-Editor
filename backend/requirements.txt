@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+python-multipart
+opencv-python<5
+librosa
+numpy<2
+scipy
+imageio-ffmpeg
+
+# Required: the "did the batsman actually swing?" check.
+# Later releases removed the pose "solutions" API this app uses; 0.10.21 is the
+# last version validated with it.
+# Note: mediapipe pins protobuf, which can clash with tensorflow in a
+# shared environment - prefer a virtualenv for this project.
+mediapipe==0.10.21

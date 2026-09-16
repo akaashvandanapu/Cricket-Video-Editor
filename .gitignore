@@ -1,0 +1,14 @@
+# source videos and everything generated from them stay local
+videos/
+outputs/
+
+# python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
