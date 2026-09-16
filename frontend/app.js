@@ -524,7 +524,9 @@ function renderTimeline(videos, j) {
       }
     }
     const empty = r.strip.querySelector(".tl-empty") || r.strip.appendChild(Object.assign(document.createElement("span"), { className: "tl-empty" }));
-    empty.textContent = events.length ? "" : (v.state === "done" ? "no deliveries" : (cls === "running" ? "listening…" : ""));
+    empty.textContent = events.length ? ""
+      : v.state === "done" ? (v.events_total === 0 ? "no deliveries heard" : "none kept")
+      : v.stage === "scanning" && cls === "running" ? "listening…" : "";
   });
 }
 

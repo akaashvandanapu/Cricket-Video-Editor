@@ -2,11 +2,12 @@
 
 Decoding is the cost: 4K HEVC runs at a handful of frames per second even
 on the hardware decoder, and every `-ss` seek re-decodes from the previous
-keyframe. The output width is almost free by comparison. So instead of the
-swing check decoding its own 640 px window and the ball check another at
-1280 px, the pipeline decodes [onset - 0.5 s, onset + 0.3 s] once at
-1280 px; the swing check gets a 640 px resize of the last 0.6 s of it, the
-ball check gets all of it.
+keyframe. So the two checks never decode separately: with the ball check
+on, the pipeline decodes [onset - 0.5 s, onset + 0.3 s] once at 1280 px,
+the swing check gets a 640 px resize of the last 0.6 s of it and the ball
+check gets all of it. With the ball check off, only the swing check's own
++-0.3 s at 640 px is decoded - a 1280 px window costs ~2.5x more under
+load and would slow every run for a check nobody asked for.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from . import ball_verifier, ffmpeg_io, pose_verifier
 from .ball_verifier import BallResult
 from .pose_verifier import SwingResult
 
-_frame_size_cache: dict[str, tuple[int, int]] = {}
+_frame_size_cache: dict[tuple[str, int], tuple[int, int]] = {}
 
 
 @dataclass
@@ -39,12 +40,17 @@ class VisualWindow:
         return self.frames[self.swing_start:]
 
 
-def decode_window(video: Path, event_time: float) -> VisualWindow:
-    key = str(video)
+def decode_window(video: Path, event_time: float, for_ball: bool) -> VisualWindow:
+    """for_ball: decode the wider, higher-resolution window both checks
+    share; otherwise just what the swing check needs."""
+    if for_ball:
+        width, pre, post = ball_verifier.ANALYSIS_WIDTH, ball_verifier.PRE_SECONDS, ball_verifier.POST_SECONDS
+    else:
+        width, pre, post = pose_verifier.ANALYSIS_WIDTH, pose_verifier.HALF_WINDOW, pose_verifier.HALF_WINDOW
+    key = (str(video), width)
     if key not in _frame_size_cache:
-        _frame_size_cache[key] = ffmpeg_io.probe_frame_size(video, ball_verifier.ANALYSIS_WIDTH, "bgr24")
+        _frame_size_cache[key] = ffmpeg_io.probe_frame_size(video, width, "bgr24")
     h, w = _frame_size_cache[key]
-    pre, post = ball_verifier.PRE_SECONDS, ball_verifier.POST_SECONDS
     start = max(0.0, event_time - pre)
     frames = ffmpeg_io.decode_window(video, start, event_time + post - start, w, h, "bgr24")
     n = len(frames)

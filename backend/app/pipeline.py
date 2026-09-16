@@ -248,7 +248,7 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
                     reason = ""
                     if visual:
                         # one decode serves both visual checks (see visual_check)
-                        win = visual_check.decode_window(video, ev.time)
+                        win = visual_check.decode_window(video, ev.time, for_ball=params.check_ball)
                         res = visual_check.check_swing(win)
                         ev.hand_speed = res.hand_speed
                         ev.visually_verified = res.verified
