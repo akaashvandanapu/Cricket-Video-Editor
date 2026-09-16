@@ -63,7 +63,40 @@ def cut_clip(video_path: Path, start: float, end: float, out_path: Path,
     )
 
 
+def _dims(path: Path) -> tuple[int, int]:
+    import cv2
+    cap = cv2.VideoCapture(str(path))
+    w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    return w, h
+
+
 def concat_clips(clip_paths: list[Path], out_path: Path) -> None:
+    """Join clips in order. Clips from one video share a frame size, so a
+    stream copy is enough; a batch across videos can mix portrait and
+    landscape, in which case every clip is letterboxed to the first clip's
+    size and re-encoded."""
+    if len({_dims(p) for p in clip_paths}) > 1:
+        w, h = _dims(clip_paths[0])
+        n = len(clip_paths)
+        cmd = [FFMPEG_EXE, "-y"]
+        for p in clip_paths:
+            cmd += ["-i", str(p)]
+        chains = "".join(
+            f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}];"
+            f"[{i}:a]aresample=48000[a{i}];" for i in range(n))
+        streams = "".join(f"[v{i}][a{i}]" for i in range(n))
+        cmd += ["-filter_complex", f"{chains}{streams}concat=n={n}:v=1:a=1[v][a]",
+                "-map", "[v]", "-map", "[a]",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-c:a", "aac", "-b:a", "128k", str(out_path)]
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode != 0 or not out_path.exists():
+            raise RuntimeError("ffmpeg concat (mixed sizes) failed: "
+                               + result.stderr.decode(errors="ignore")[-800:])
+        return
+
     list_file = out_path.with_suffix(".txt")
     with list_file.open("w", encoding="utf-8") as f:
         for p in clip_paths:

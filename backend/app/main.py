@@ -124,15 +124,18 @@ def library():
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...)):
-    safe_name = Path(file.filename).name
-    if Path(safe_name).suffix.lower() not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(400, "Unsupported file type")
-    dest = VIDEOS_DIR / safe_name
-    with dest.open("wb") as out:
-        while chunk := await file.read(4 * 1024 * 1024):
-            out.write(chunk)
-    return {"name": safe_name}
+async def upload(files: list[UploadFile] = File(...)):
+    saved = []
+    for file in files:
+        safe_name = Path(file.filename).name
+        if Path(safe_name).suffix.lower() not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(400, f"Unsupported file type: {safe_name}")
+        dest = VIDEOS_DIR / safe_name
+        with dest.open("wb") as out:
+            while chunk := await file.read(4 * 1024 * 1024):
+                out.write(chunk)
+        saved.append(safe_name)
+    return {"names": saved}
 
 
 @app.get("/api/preview-source")
@@ -179,7 +182,7 @@ def make_proxy(video: str):
 
 
 class ProcessRequest(BaseModel):
-    video: str
+    videos: list[str] = Field(min_length=1)
     sensitivity: float = Field(50.0, ge=0, le=100)
     min_gap: float = Field(3.5, ge=1.0, le=10)
     strictness: float = Field(50.0, ge=0, le=100)
@@ -189,14 +192,15 @@ class ProcessRequest(BaseModel):
     resolution: str = "1080"
 
 
-pipeline_jobs: dict[str, pipeline.JobState] = {}
+pipeline_jobs: dict[str, pipeline.BatchJob] = {}
 
 
 @app.post("/api/process")
 def process(req: ProcessRequest):
-    """Detect every delivery and cut it, as one streaming pipeline. Poll
+    """Detect every delivery in each video and cut it - one streaming
+    pipeline per video, run back to back into one session. Poll
     /api/jobs/{id}: clips appear in the result as each one finishes."""
-    path = resolve_video(req.video)
+    paths = [resolve_video(v) for v in dict.fromkeys(req.videos)]   # de-dupe, keep order
     if req.use_visual and not pose_verifier.pose_available():
         raise HTTPException(
             500,
@@ -205,19 +209,24 @@ def process(req: ProcessRequest):
         )
     job_id = uuid.uuid4().hex[:8]
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    safe_stub = re.sub(r"[^A-Za-z0-9_-]+", "_", path.stem)
-    out_dir = FULL_DIR / f"{safe_stub}_{stamp}_{job_id}"
+    stub = re.sub(r"[^A-Za-z0-9_-]+", "_", paths[0].stem)
+    if len(paths) > 1:
+        stub += f"_and_{len(paths) - 1}_more"
+    out_dir = FULL_DIR / f"{stub}_{stamp}_{job_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    job = pipeline.JobState()
-    job.session = out_dir.name
-    pipeline_jobs[job_id] = job
+    batch = pipeline.BatchJob(out_dir.name)
+    for p in paths:
+        j = pipeline.JobState(p.name)
+        j.session = out_dir.name
+        batch.jobs.append(j)
+    pipeline_jobs[job_id] = batch
     params = pipeline.PipelineParams(
         sensitivity=req.sensitivity, min_gap=req.min_gap, strictness=req.strictness,
         use_visual=req.use_visual, pre_roll=req.pre_roll, post_roll=req.post_roll,
         resolution=req.resolution,
     )
-    threading.Thread(target=pipeline.run_pipeline, args=(job, path, params, out_dir),
+    threading.Thread(target=pipeline.run_batch, args=(batch, paths, params, out_dir),
                      daemon=True, name=f"pipeline-{job_id}").start()
     return {"job_id": job_id}
 

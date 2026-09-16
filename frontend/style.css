@@ -71,14 +71,31 @@ body {
   top: var(--topbar-h);
   height: calc(100vh - var(--topbar-h));
 }
-.source-wrap { display: flex; flex-direction: column; gap: 8px; }
-.source-wrap video {
+.source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: calc(100vh - var(--topbar-h) - 60px);
+  overflow-y: auto;      /* many videos: the list scrolls, the pane stays put */
+  padding-right: 4px;
+}
+.source-item { display: flex; flex-direction: column; gap: 6px; }
+.source-item video {
   width: 100%;
-  max-height: calc(100vh - var(--topbar-h) - 120px);
+  max-height: 60vh;
   background: #000;
   border-radius: 8px;
   border: 1px solid var(--border);
 }
+.source-item.active video { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-dim); }
+.source-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.source-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-remove {
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 6px; padding: 2px 8px; font-size: 12px; line-height: 1.4;
+}
+.source-remove:hover { color: var(--text); border-color: var(--muted); }
+.source-remove:disabled { opacity: 0.35; }
 .source-empty {
   border: 2px dashed var(--accent-dim);
   border-radius: 10px;
@@ -241,6 +258,13 @@ button.secondary { background: transparent; border: 1px solid var(--accent-dim);
   font-weight: 600;
   font-size: 13px;
 }
+
+.video-progress { display: flex; flex-direction: column; gap: 4px; margin: 10px 0 4px; font-size: 13px; color: var(--muted); max-width: 720px; }
+.video-progress .vp { display: flex; gap: 10px; align-items: center; }
+.video-progress .vp b { color: var(--text); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-progress .vp.done { color: var(--accent); }
+.video-progress .vp.running b { color: var(--accent); }
+.clip-card .clip-video { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
 
 /* ---------------- pipeline stage board ---------------- */
 .stage-board { display: flex; gap: 10px; margin: 12px 0; max-width: 720px; }

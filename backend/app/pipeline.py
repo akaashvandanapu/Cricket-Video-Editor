@@ -74,8 +74,9 @@ class PipelineParams:
 class JobState:
     """Thread-safe progress + results for one pipeline run."""
 
-    def __init__(self):
+    def __init__(self, video_name: str = ""):
         self.lock = threading.Lock()
+        self.video = video_name
         self.state = "running"
         self.stage = "scanning"
         self.error: Optional[str] = None
@@ -95,6 +96,7 @@ class JobState:
     def snapshot(self) -> dict:
         with self.lock:
             return {
+                "video": self.video,
                 "state": self.state,
                 "stage": self.stage,
                 "error": self.error,
@@ -124,7 +126,10 @@ def _split_contiguous(items: list, parts: int) -> list[list]:
     return [c for c in out if c]
 
 
-def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Path) -> None:
+def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Path,
+                 prefix: str = "") -> None:
+    """prefix: prepended to clip filenames so several videos can share one
+    session directory (batch runs)."""
     try:
         meta = probe(video)
         job.video_duration = meta["duration"]
@@ -163,10 +168,11 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
                     idx, ev = item
                     start = max(0.0, ev.time - params.pre_roll)
                     end = min(meta["duration"], ev.time + params.post_roll)
-                    filename = f"clip_{idx + 1:03d}_t{ev.time:.1f}s.mp4"
+                    filename = f"{prefix}clip_{idx + 1:03d}_t{ev.time:.1f}s.mp4"
                     cut_clip(video, start, end, out_dir / filename,
                              resolution=params.resolution, decoder=decoder)
                     clip = {
+                        "video": video.name,
                         "index": idx + 1,
                         "filename": filename,
                         "event_time": round(ev.time, 2),
@@ -255,3 +261,60 @@ def run_pipeline(job: JobState, video: Path, params: PipelineParams, out_dir: Pa
         with job.lock:
             job.state = "error"
             job.error = str(exc)
+
+
+class BatchJob:
+    """Several videos processed one after another into one session.
+
+    Videos run sequentially because a single run already saturates the
+    machine (4 pose workers + 6 cutters); running two videos at once would
+    only make both slower. Clips from every video land in the same session
+    directory so one export can combine them.
+    """
+
+    def __init__(self, session: str):
+        self.session = session
+        self.jobs: list[JobState] = []
+        self.state = "running"
+        self.error: Optional[str] = None
+        self.current = 0
+
+    def snapshot(self) -> dict:
+        parts = [j.snapshot() for j in self.jobs]
+        clips = [c for pj in parts for c in pj["clips"]]
+        clips.sort(key=lambda c: (c["video"], c["event_time"]))
+        agg = {k: sum(pj[k] for pj in parts) for k in
+               ("candidates", "rejected_audio", "events_total", "verified_done",
+                "rejected_visual", "unverified", "cut_total", "cut_done")}
+        running = next((pj for pj in parts if pj["state"] == "running"), None)
+        stage = running["stage"] if running else ("done" if self.state != "running" else "scanning")
+        errors = [f'{pj["video"]}: {pj["error"]}' for pj in parts if pj["error"]]
+        if self.error:
+            errors.append(self.error)
+        return {
+            "state": self.state,
+            "stage": stage,
+            "error": "; ".join(errors) if errors else None,
+            "session": self.session,
+            "current": self.current,
+            "videos": [{"video": pj["video"], "state": pj["state"], "stage": pj["stage"],
+                        "events_total": pj["events_total"], "verified_done": pj["verified_done"],
+                        "cut_done": pj["cut_done"], "cut_total": pj["cut_total"],
+                        "video_duration": pj["video_duration"], "events": pj["events"]}
+                       for pj in parts],
+            "clips": clips,
+            **agg,
+        }
+
+
+def run_batch(batch: BatchJob, videos: list[Path], params: PipelineParams, out_dir: Path) -> None:
+    import re
+    try:
+        for i, (job, video) in enumerate(zip(batch.jobs, videos)):
+            batch.current = i
+            stub = re.sub(r"[^A-Za-z0-9_-]+", "_", video.stem)
+            run_pipeline(job, video, params, out_dir, prefix=f"{stub}__")
+        batch.state = "done"
+    except Exception as exc:
+        batch.state = "error"
+        batch.error = str(exc)

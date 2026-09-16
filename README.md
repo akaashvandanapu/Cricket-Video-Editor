@@ -70,8 +70,10 @@ The UI looks for the API on port 8500; set `window.CVE_API_BASE` before
 
 ## Using it
 
-Upload a video from the button top-right, or drop a file anywhere on the
-page. The left panel plays the raw video; the right panel is the workflow.
+Upload one or several videos from the button top-right, or drop files
+anywhere on the page. Every video in the batch is shown as its own player
+in the left panel (the `x` drops one from the batch without deleting the
+file); the right panel is the workflow and runs over all of them.
 
 1. **Parameters** — seconds to keep before / after each delivery,
    detection sensitivity, strictness, whether to check the video for a
@@ -79,11 +81,13 @@ page. The left panel plays the raw video; the right panel is the workflow.
 2. **Detect deliveries** — one button runs the whole pipeline. The stage
    board shows *listen -> check swing -> cut* progressing live, and **Next**
    unlocks when every clip is done.
-3. **Cut clips & review** — every delivery as its own clip with its sound
-   and hand-speed scores. Untick what you don't want (*Weakest first* puts
-   the doubtful ones at the top). Playing a clip jumps the left-hand player
-   to that exact moment in the full video. Choose *separate clips* or *one
-   combined video* in the footer and export.
+3. **Cut clips & review** — every delivery from every video as its own
+   clip, labelled with its source and its sound / hand-speed scores. Untick
+   what you don't want (*Weakest first* puts the doubtful ones at the top).
+   Playing a clip jumps the matching source player on the left to that
+   exact moment. Choose *separate clips* or *one combined video* in the
+   footer and export — a combined video can span several sources, and
+   mixed portrait / landscape clips are letterboxed to one size.
 
 Changing anything in an earlier step clears everything derived from it,
 so you can never export clips that don't match the settings on screen.
@@ -162,6 +166,10 @@ cut workers  x6      (3 on the hardware decoder + 3 software, shared queue)
     v  clips appear in the review tab as each one finishes
 ```
 
+- **Several videos** run back to back into one session (`BatchJob`): a
+  single run already saturates the machine, so running two videos at once
+  would only make both slower. Clips from every video share the session
+  so one export can combine them.
 - The **audio scan is deliberately one pass**: its thresholds are relative
   to the whole recording (noise floor, and gap suppression needs neighbours
   on both sides of any cut point). Splitting it would change the answer at
@@ -244,10 +252,10 @@ All routes are on the backend (`:8500`), JSON unless noted.
 | Method | Route | Purpose |
 |---|---|---|
 | GET | `/api/library` | videos in `videos/`, newest first |
-| POST | `/api/upload` | multipart upload into `videos/` |
+| POST | `/api/upload` | multipart upload of one or more files into `videos/` |
 | GET | `/api/preview-source?video=` | what the left panel should play; whether a proxy is needed |
 | POST | `/api/proxy?video=` | build the 480p preview copy (job) |
-| POST | `/api/process` | run the detect -> verify -> cut pipeline (job) |
+| POST | `/api/process` | run detect -> verify -> cut over a list of videos (job) |
 | GET | `/api/jobs/{id}` | job progress; for a pipeline job, `clips` grows as they finish |
 | POST | `/api/export` | zip and/or concatenate a chosen subset of a session's clips |
 | GET | `/api/capabilities` | pose library available? which hardware decoder? |

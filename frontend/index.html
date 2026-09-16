@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Cricket Highlight Cutter</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2714%27 fill=%27%235fd068%27/%3E%3Cpath d=%27M9 23 L23 9%27 stroke=%27%230f1613%27 stroke-width=%274%27 stroke-linecap=%27round%27/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="style.css?v=4" />
+<link rel="stylesheet" href="style.css?v=5" />
 </head>
 <body>
   <header class="topbar">
@@ -15,8 +15,8 @@
     </div>
     <div class="topbar-right">
       <span id="uploadStatus" class="upload-status"></span>
-      <input type="file" id="uploadInput" accept="video/*" class="hidden" />
-      <button id="uploadBtn">Upload video</button>
+      <input type="file" id="uploadInput" accept="video/*" multiple class="hidden" />
+      <button id="uploadBtn">Upload videos</button>
     </div>
   </header>
 
@@ -28,15 +28,11 @@
     <!-- LEFT 30%: the raw video, fixed and vertically centred -->
     <aside class="source-pane">
       <div id="sourceEmpty" class="source-empty">
-        <p>No video yet.</p>
-        <p class="hint">Upload one from the top right, or drop a file anywhere on this page.</p>
+        <p>No videos yet.</p>
+        <p class="hint">Upload from the top right, or drop files anywhere on this page. Several at once is fine - they are all processed together.</p>
       </div>
-      <div id="sourceWrap" class="source-wrap hidden">
-        <video id="sourceVideo" controls preload="metadata"></video>
-        <div id="sourceMeta" class="meta"></div>
-        <div id="sourceSync" class="sync-note"></div>
-        <div id="proxyNote" class="hint"></div>
-      </div>
+      <div id="sourceList" class="source-list hidden"></div>
+      <div id="sourceSync" class="sync-note"></div>
     </aside>
 
     <!-- RIGHT 70%: tabs / scrolling body / footer -->
@@ -91,7 +87,8 @@
 
         <!-- ---------------- Detect + cut ---------------- -->
         <div class="tab-panel" data-panel="detect">
-          <p class="hint" id="detectIntro">One pass: listens for every bat-on-ball sound, checks the batsman swung, and cuts each delivery to a clip — all running in parallel. Clips appear in the next tab as they finish.</p>
+          <p class="hint" id="detectIntro">One pass over every video on the left: listens for each bat-on-ball sound, checks the batsman swung, and cuts each delivery to a clip — all running in parallel. Clips appear in the next tab as they finish.</p>
+          <div id="videoProgress" class="video-progress"></div>
           <div id="detectStatus" class="result-text"></div>
           <div id="stageBoard" class="stage-board hidden">
             <div class="stage" id="stScan"><span class="stage-name">Listen</span><span class="stage-val" id="stScanVal">–</span></div>
@@ -145,6 +142,6 @@
   </main>
 
   <div id="dropOverlay" class="drop-overlay hidden"><span>Drop the video to upload</span></div>
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>
