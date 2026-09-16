@@ -24,9 +24,9 @@ clips in a few minutes.
 
 ## Quick start
 
-**Requirements:** Windows with PowerShell, Python 3.11. Everything else
-(including ffmpeg) is installed automatically into a project-local
-virtual environment.
+**Requirements:** Windows with PowerShell, Python 3.11, Node.js 20+ (for
+the UI). Everything else (including ffmpeg) is installed automatically
+into a project-local virtual environment / `node_modules`.
 
 One-time setup — adds the `cve` commands to your PowerShell profile:
 
@@ -46,8 +46,8 @@ cve-fe        # frontend UI  ->  http://localhost:8501   <- open this
 ```
 
 The first `cve-be` creates `backend\.venv` and installs the dependencies
-(a few minutes). `cve` prints help; `cve-be 8502` / `cve-fe 8503` pick
-other ports.
+(a few minutes); the first `cve-fe` runs `npm install`. `cve` prints help;
+`cve-be 8502` / `cve-fe 8503` pick other ports.
 
 <details>
 <summary>Without the shortcuts</summary>
@@ -60,10 +60,12 @@ python -m venv .venv
 
 # second terminal
 cd frontend
-python -m http.server 8501
+npm install
+npm run dev          # Vite dev server on :8501
 ```
-The UI looks for the API on port 8500; set `window.CVE_API_BASE` before
-`app.js` loads if the backend runs elsewhere.
+The UI looks for the API on port 8500; set `VITE_API_BASE` in
+`frontend/.env.local` (or `window.CVE_API_BASE`) if the backend runs
+elsewhere. `npm run build` writes a static bundle to `frontend/dist/`.
 </details>
 
 ---
@@ -292,12 +294,16 @@ backend/
     quiet_stderr.py   filters MediaPipe's native log spam
     config.py         paths
   requirements.txt
-frontend/
-  index.html / app.js / style.css   static UI, no build step
+frontend/                 Vite + React + Tailwind + shadcn/ui (dark / light)
+  src/App.tsx             batch, run and export state
+  src/hooks/useRun.ts     starts a job and polls it
+  src/components/app/     TopBar, SourcePane, ParamsTab, DetectTab, ReviewTab, WorkFooter
+  src/components/ui/      shadcn primitives
+  src/lib/                api client, types, formatters
 scripts/dev/
   cve-commands.ps1    cve / cve-be / cve-fe
   run-backend.ps1     creates the venv on first run, checks mediapipe
-  run-frontend.ps1    static server for the UI
+  run-frontend.ps1    Vite dev server for the UI (npm install on first run)
   install-shell.ps1   adds the commands to your PowerShell profile
 videos/     your source videos          (git-ignored)
 outputs/    clips, exports, proxies     (git-ignored)

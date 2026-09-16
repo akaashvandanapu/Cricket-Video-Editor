@@ -12,3 +12,7 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+
+# frontend (Vite)
+frontend/node_modules/
+frontend/dist/
