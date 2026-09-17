@@ -24,11 +24,28 @@ clips in a few minutes.
 
 ## Quick start
 
-**Requirements:** Windows with PowerShell, Python 3.11, Node.js 20+ (for
-the UI). Everything else (including ffmpeg) is installed automatically
-into a project-local virtual environment / `node_modules`.
+### What you need installed
 
-One-time setup — adds the `cve` commands to your PowerShell profile:
+| Tool | Version | Why | Get it |
+|---|---|---|---|
+| **Windows 10/11 with PowerShell** | 5.1 or 7 | the `cve` helper scripts are PowerShell (see below for macOS / Linux) | built in |
+| **Git** | any | to clone the repo | https://git-scm.com |
+| **Python** | **3.11** (3.9–3.12 work; 3.13 does **not** — MediaPipe 0.10.21 has no wheel for it) | backend: detection, pose check, cutting | https://www.python.org/downloads/ — tick *Add python.exe to PATH* |
+| **Node.js** | **20 or newer** (comes with `npm`) | the web UI (Vite + React) | https://nodejs.org (LTS) |
+
+Everything else is installed for you on first run, **into the project
+folder only** (nothing global):
+
+- Python packages → `backend\.venv` (FastAPI, OpenCV, librosa, MediaPipe…)
+- **ffmpeg** → bundled by the `imageio-ffmpeg` package, no separate install
+- UI packages → `frontend\node_modules`
+
+Also useful to know: the first backend start downloads ~1 GB of Python
+packages, a run needs a few GB of free disk for clips and proxies, and any
+modern laptop works — a GPU is not required (hardware decoding is used when
+available and falls back to software automatically).
+
+### Install (one time)
 
 ```powershell
 git clone https://github.com/akaashvandanapu/Cricket-Video-Editor.git
@@ -36,46 +53,86 @@ cd Cricket-Video-Editor
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\install-shell.ps1
 ```
 
-Then, in **two new PowerShell windows**:
+That adds three commands to your PowerShell profile — `cve`, `cve-be`,
+`cve-fe`. **Open a new PowerShell window** so they are picked up (or run
+`. $PROFILE`).
+
+### Run
+
+Two PowerShell windows, kept open while you use the app:
 
 ```powershell
-cve-be        # backend API  ->  http://localhost:8500
+cve-be        # window 1: backend API  ->  http://localhost:8500
 ```
 ```powershell
-cve-fe        # frontend UI  ->  http://localhost:8501   <- open this
+cve-fe        # window 2: frontend UI  ->  http://localhost:8501   <- open this in your browser
 ```
 
 The first `cve-be` creates `backend\.venv` and installs the dependencies
-(a few minutes); the first `cve-fe` runs `npm install`. `cve` prints help;
+(a few minutes; it also verifies that MediaPipe imports before starting).
+The first `cve-fe` runs `npm install`. `cve` on its own prints help;
 `cve-be 8502` / `cve-fe 8503` pick other ports.
 
+Then open **http://localhost:8501**, drop a video onto the page, and follow
+the three steps across the top: **Parameters → Detect deliveries → Review &
+export**.
+
+### Stopping / updating
+
+- `Ctrl+C` in each window stops the servers. Your videos (`videos/`) and
+  clips (`outputs/`) stay on disk; both folders are git-ignored.
+- To update: `git pull`, then start `cve-be` / `cve-fe` again — they
+  reinstall anything that changed.
+
 <details>
-<summary>Without the shortcuts</summary>
+<summary>Without the PowerShell helpers (also macOS / Linux)</summary>
 
 ```bash
+# backend
 cd backend
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python -m uvicorn app.main:app --app-dir . --port 8500
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt          # Windows: .venv\Scripts\pip
+.venv/bin/python -m uvicorn app.main:app --app-dir . --port 8500
 
-# second terminal
+# frontend, in a second terminal
 cd frontend
 npm install
 npm run dev          # Vite dev server on :8501
 ```
 The UI looks for the API on port 8500; set `VITE_API_BASE` in
 `frontend/.env.local` (or `window.CVE_API_BASE`) if the backend runs
-elsewhere. `npm run build` writes a static bundle to `frontend/dist/`.
+elsewhere. `npm run build` writes a static bundle to `frontend/dist/`
+that any static host can serve.
+</details>
+
+<details>
+<summary>Common first-run problems</summary>
+
+- **`python` is not recognised / wrong version** — install Python 3.11 and
+  make sure *Add python.exe to PATH* was ticked; `py -3.11 --version` should
+  print 3.11.x. Then run `cve-be` again.
+- **`npm` is not recognised** — install Node.js LTS from nodejs.org and open
+  a new PowerShell window.
+- **`cve-be` says mediapipe could not be installed** — you are on Python
+  3.13 (or 3.8). Install 3.11, delete `backend\.venv`, run `cve-be` again.
+- **`cve` commands not found after install** — open a *new* PowerShell
+  window; the installer edits your profile, which only loads at startup.
+- **Scripts are blocked (execution policy)** — run once, as your user:
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+- **Port already in use** — an earlier server is still running; close that
+  window or use `cve-be 8502` / `cve-fe 8503`.
 </details>
 
 ---
 
 ## Using it
 
-Upload one or several videos from the button top-right, or drop files
-anywhere on the page. Every video in the batch is shown as its own player
-in the left panel (the `x` drops one from the batch without deleting the
-file); the right panel is the workflow and runs over all of them.
+Upload one or several videos from the button top-right, click the empty
+**Sources** panel, or drop files anywhere on the page. Every video in the
+batch is shown as its own player in the left panel, sized to fit the screen
+whatever its aspect ratio (the `x` drops one from the batch without
+deleting the file); the right panel is the three-step workflow and runs
+over all of them.
 
 1. **Parameters** — seconds to keep before / after each delivery,
    detection sensitivity, strictness, minimum gap between deliveries,
@@ -96,12 +153,12 @@ file); the right panel is the workflow and runs over all of them.
 
    The stage board shows *listen -> check -> cut* progressing live with
    how long each stage took, one timeline strip per video shows every
-   delivery found, and **Next** unlocks when every clip is done.
+   delivery found, and **Review clips** unlocks when every clip is done.
 3. **Cut clips & review** — every delivery from every video as its own
    clip, labelled with its source and its sound / hands / ball scores.
-   Untick what you don't want. Playing a clip jumps the matching source
-   player on the left to that exact moment. Choose *separate clips* or
-   *one combined video* in the footer and export — a combined video can
+   Untick **Keep** on the ones you don't want. Playing a clip jumps the
+   matching source player on the left to that exact moment. Choose
+   *separate clips* or *one combined video* in the footer and export — a combined video can
    span several sources, and mixed portrait / landscape clips are
    letterboxed to one size.
 
@@ -294,12 +351,15 @@ backend/
     quiet_stderr.py   filters MediaPipe's native log spam
     config.py         paths
   requirements.txt
-frontend/                 Vite + React + Tailwind + shadcn/ui (dark / light)
+frontend/                 Vite + React + Tailwind + shadcn/ui (light / dark, Inter + JetBrains Mono)
   src/App.tsx             batch, run and export state
   src/hooks/useRun.ts     starts a job and polls it
-  src/components/app/     TopBar, SourcePane, ParamsTab, DetectTab, ReviewTab, WorkFooter
+  src/hooks/useFitHeight.ts  publishes a pane's height so videos fit without scrolling
+  src/components/app/     TopBar, Stepper, SourcePane, ParamsTab, DetectTab, ReviewTab, WorkFooter
   src/components/ui/      shadcn primitives
-  src/lib/                api client, types, formatters
+  src/lib/                api client, types, formatters, video sizing helpers
+  src/assets/             batsman illustration used as the mark
+  public/favicon.png
 scripts/dev/
   cve-commands.ps1    cve / cve-be / cve-fe
   run-backend.ps1     creates the venv on first run, checks mediapipe

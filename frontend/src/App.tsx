@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Upload } from "lucide-react"
 import { toast } from "sonner"
 
 import { DetectTab } from "@/components/app/DetectTab"
@@ -6,18 +7,21 @@ import { ParamsTab } from "@/components/app/ParamsTab"
 import { ReviewTab } from "@/components/app/ReviewTab"
 import { SourcePane, type SeekRequest } from "@/components/app/SourcePane"
 import { TopBar } from "@/components/app/TopBar"
-import { WorkFooter, type ExportState, type Tab } from "@/components/app/WorkFooter"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Stepper, type Step, type Tab } from "@/components/app/Stepper"
+import { WorkFooter, type ExportState } from "@/components/app/WorkFooter"
 import { useRun } from "@/hooks/useRun"
 import { api, postJson } from "@/lib/api"
 import { fmtElapsed, plural, VIDEO_FILE_RE } from "@/lib/format"
-import { DEFAULT_PARAMS, type Clip, type ExportResult, type Params } from "@/lib/types"
+import { useFitHeight } from "@/hooks/useFitHeight"
+import { DEFAULT_PARAMS, type Clip, type ExportResult, type Params, type VideoMeta } from "@/lib/types"
+import { aspectRatio } from "@/lib/video"
 import { cn } from "@/lib/utils"
 
 const IDLE_EXPORT: ExportState = { mode: "separate", busy: false, status: "", error: null, result: null }
 
 export default function App() {
   const [videos, setVideos] = useState<string[]>([])
+  const [metas, setMetas] = useState<Record<string, VideoMeta>>({})
   const [params, setParams] = useState<Params>(DEFAULT_PARAMS)
   const [tab, setTab] = useState<Tab>("params")
   const [checksOpen, setChecksOpen] = useState(true)
@@ -27,6 +31,10 @@ export default function App() {
   const [playing, setPlaying] = useState<Clip | null>(null)
   const [exportState, setExportState] = useState<ExportState>(IDLE_EXPORT)
   const { run, start, clear } = useRun()
+  const picker = useRef<HTMLInputElement>(null)
+  const workArea = useFitHeight<HTMLDivElement>()
+  const onMeta = useCallback((name: string, meta: VideoMeta) => setMetas((m) => ({ ...m, [name]: meta })), [])
+  const pickFiles = () => picker.current?.click()
 
   // ---- derived
   const clips = useMemo<Clip[]>(() => {
@@ -34,6 +42,7 @@ export default function App() {
     return [...(run.snapshot?.clips ?? [])].sort(
       (a, b) => (order.get(a.video) ?? 0) - (order.get(b.video) ?? 0) || a.event_time - b.event_time)
   }, [run.snapshot?.clips, videos])
+  const ratios = useMemo(() => Object.fromEntries(videos.map((v) => [v, aspectRatio(metas[v])])), [videos, metas])
   const selected = useMemo(() => new Set(clips.filter((c) => !deselected.has(c.filename)).map((c) => c.filename)), [clips, deselected])
   const canDetect = videos.length > 0
   const canReview = run.done && clips.length > 0
@@ -159,33 +168,37 @@ export default function App() {
     }
   }
 
+  const steps: Step[] = [
+    { id: "params", title: "Parameters", hint: "Clip length & sensitivity", enabled: true, done: canDetect },
+    { id: "detect", title: "Detect deliveries", hint: "Listen, check, cut", enabled: canDetect, done: canReview },
+    { id: "review", title: "Review & export", hint: "Keep the good ones", enabled: clips.length > 0, done: !!exportState.result },
+  ]
+
   const syncNote = playing ? `${playing.video} at ${playing.start.toFixed(2)}s (clip ${playing.start.toFixed(2)}–${playing.end.toFixed(2)}s)` : ""
 
   return (
     <div className="flex min-h-dvh flex-col lg:h-dvh">
-      <TopBar videoCount={videos.length} uploading={uploading} disabled={run.running} onFiles={uploadFiles} />
+      <input ref={picker} type="file" accept="video/*,.mp4,.mov,.m4v,.mkv,.avi" multiple className="hidden"
+        onChange={(e) => { if (e.target.files?.length) uploadFiles(e.target.files); e.target.value = "" }} />
+      <TopBar videoCount={videos.length} uploading={uploading} disabled={run.running} onPick={pickFiles} />
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[clamp(300px,30%,540px)_1fr] lg:grid-rows-[100%] lg:overflow-hidden">
+      <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[clamp(320px,30%,560px)_1fr] lg:grid-rows-[100%] lg:overflow-hidden">
         <SourcePane videos={videos} activeVideo={playing?.video ?? null} seek={seek} running={run.running} syncNote={syncNote}
-          onRemove={(name) => { if (run.running) return; setVideos((v) => v.filter((n) => n !== name)) }} />
+          onRemove={(name) => { if (run.running) return; setVideos((v) => v.filter((n) => n !== name)) }} onMeta={onMeta} onPick={pickFiles} />
 
         <section className="flex min-h-0 min-w-0 flex-col">
-          <Tabs value={shownTab} onValueChange={(v) => setTab(v as Tab)} className="gap-0 overflow-x-auto border-b px-3 sm:px-5">
-            <TabsList variant="line" className="h-12 w-full justify-start gap-1 self-start bg-transparent p-0 sm:w-fit">
-              <TabsTrigger value="params" className="flex-none px-3">Parameters</TabsTrigger>
-              <TabsTrigger value="detect" disabled={!canDetect} className="flex-none px-3">Detect deliveries</TabsTrigger>
-              <TabsTrigger value="review" disabled={clips.length === 0} className="flex-none px-3">Cut clips &amp; review</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <div className="shrink-0 border-b bg-background">
+            <Stepper steps={steps} current={shownTab} onSelect={setTab} />
+          </div>
 
-          <div className="flex-1 px-3 py-5 sm:px-5 sm:py-6 lg:min-h-0 lg:overflow-x-hidden lg:overflow-y-auto">
+          <div ref={workArea} className="flex-1 px-3 py-5 sm:px-6 sm:py-6 lg:min-h-0 lg:overflow-x-hidden lg:overflow-y-auto">
             {shownTab === "params" && <ParamsTab params={params} disabled={run.running} onChange={(p) => setParams((c) => ({ ...c, ...p }))} />}
             {shownTab === "detect" && (
               <DetectTab params={params} run={run} checksOpen={checksOpen} onChecksOpenChange={setChecksOpen}
                 onChange={(p) => setParams((c) => ({ ...c, ...p }))} />
             )}
             {shownTab === "review" && (
-              <ReviewTab clips={clips} selected={selected} playing={playing?.filename ?? null} multiVideo={videos.length > 1}
+              <ReviewTab clips={clips} ratios={ratios} selected={selected} playing={playing?.filename ?? null} multiVideo={videos.length > 1}
                 showBall={!!run.runParams?.checkBall} onSelect={onSelect} onSelectAll={onSelectAll} onPlay={onPlay} />
             )}
           </div>
@@ -197,10 +210,17 @@ export default function App() {
       </main>
 
       <div className={cn(
-        "pointer-events-none fixed inset-0 z-50 grid place-items-center bg-background/85 text-lg font-semibold text-brand backdrop-blur-sm transition-opacity",
+        "pointer-events-none fixed inset-0 z-50 grid place-items-center bg-background/80 p-6 backdrop-blur-md transition-opacity duration-200",
         dragging ? "opacity-100" : "opacity-0",
       )}>
-        <div className="rounded-xl border-2 border-dashed border-brand px-10 py-8">Drop the videos to upload</div>
+        <div className={cn(
+          "flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-foreground/40 bg-card/80 px-14 py-12 text-center shadow-pop transition-transform duration-200",
+          dragging ? "scale-100" : "scale-95",
+        )}>
+          <span className="grid size-12 place-items-center rounded-full bg-foreground text-background"><Upload className="size-5" /></span>
+          <p className="text-lg font-semibold tracking-[-0.01em]">Drop to add to the batch</p>
+          <p className="text-sm text-muted-foreground">MP4, MOV, MKV or AVI — several at once is fine.</p>
+        </div>
       </div>
     </div>
   )
