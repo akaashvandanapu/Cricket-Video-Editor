@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import threading
 import time
@@ -49,9 +50,21 @@ def _ignore_client_resets(loop, context):
 def warm_up():
     quiet_stderr.install()
     asyncio.get_running_loop().set_exception_handler(_ignore_client_resets)
-    # importing the pose library takes a few seconds: do it now, in the
-    # background, so the first run doesn't pay for it
-    threading.Thread(target=pose_verifier.pose_available, daemon=True).start()
+    # importing the pose library takes 5-15 s and holds the interpreter
+    # while it initialises: do it now, in the background, so the first run
+    # doesn't pay for it - and say so, or the startup looks stuck
+    log = logging.getLogger("uvicorn.error")
+    log.info("Loading the swing-check model in the background (5-15 s); the API is already up.")
+
+    def load():
+        started = time.monotonic()
+        ok = pose_verifier.pose_available()
+        if ok:
+            log.info("Swing-check model ready (%.0f s).", time.monotonic() - started)
+        else:
+            log.warning("Swing check unavailable: %s", pose_verifier.pose_unavailable_reason())
+
+    threading.Thread(target=load, daemon=True).start()
 
 
 @app.get("/favicon.ico", include_in_schema=False)

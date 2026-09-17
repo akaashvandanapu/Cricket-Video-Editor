@@ -26,4 +26,6 @@ if (-not (Test-Path (Join-Path $Frontend "node_modules"))) {
 }
 
 Write-Host ">> frontend on http://localhost:$Port   (API: http://localhost:8500)"
-npm run dev -- --port $Port --strictPort
+# call vite directly: PowerShell strips a bare "--", so "npm run dev -- --port"
+# would hand the flags to npm instead of vite
+& (Join-Path $Frontend "node_modules\.bin\vite.cmd") --port $Port --strictPort
