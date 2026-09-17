@@ -115,8 +115,8 @@ function SourceCard({ name, active, removable, seek, onRemove }: CardProps) {
           <TooltipContent>Remove from this batch (the file stays on disk)</TooltipContent>
         </Tooltip>
       </div>
-      <video ref={videoRef} controls preload="metadata" src={src ?? undefined}
-        className="max-h-[34vh] w-full rounded-md lg:max-h-[44vh]" />
+      <video ref={videoRef} controls preload="auto" src={src ?? undefined}
+        className="block h-auto w-full rounded-md max-lg:max-h-[34vh] max-lg:object-contain" />
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs text-muted-foreground">
         {meta && <span>{meta.width}×{meta.height} · {(meta.fps || 0).toFixed(0)} fps · {fmtDuration(meta.duration)}</span>}
         {note && <span className="text-warn">{note}</span>}
